@@ -435,10 +435,14 @@ cat > "$DESCRIBE_SCRIPT" <<'DESCRIBE_EOF'
 import sys
 import os
 import json
+import time
 import base64
 import mimetypes
 import urllib.request
 import urllib.error
+
+MAX_ATTEMPTS = 3
+RETRY_DELAY_SEC = 2
 
 API = "https://opencode.ai/zen/go/v1/responses"
 
@@ -505,14 +509,22 @@ def main() -> None:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
         },
     )
-    try:
-        resp = urllib.request.urlopen(req, timeout=90)
-        data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        print(json.dumps({"error": f"HTTP {e.code}: {e.read().decode()[:300]}"}, ensure_ascii=False))
-        return
-    except Exception as e:
-        print(json.dumps({"error": f"请求失败: {e}"}, ensure_ascii=False))
+    data = None
+    last_err = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = urllib.request.urlopen(req, timeout=90)
+            data = json.loads(resp.read().decode())
+            break
+        except urllib.error.HTTPError as e:
+            print(json.dumps({"error": f"HTTP {e.code}: {e.read().decode()[:300]}"}, ensure_ascii=False))
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_DELAY_SEC)
+    if data is None:
+        print(json.dumps({"error": f"请求失败(已重试{MAX_ATTEMPTS}次): {last_err}"}, ensure_ascii=False))
         return
     if data.get("error"):
         print(json.dumps({"error": str(data["error"])[:300]}, ensure_ascii=False))
