@@ -1,5 +1,7 @@
 # Codex × opencode go (deepseek-v4-flash) + mimo-v2.5 识图 — 部署方案
 
+[中文](/README.md) | [English](/README.en.md)
+
 在新电脑上快速配置 Codex 使用 **opencode go 订阅的 deepseek-v4-flash** 作为主模型，并附带 **mimo-v2.5 多模态识图**能力（图片任务自动用 mimo-v2.5 描述，替代主模型的视觉盲区）。
 
 ---
