@@ -38,6 +38,14 @@ opencode.ai/zen/go/v1  (opencode go 订阅，Responses API)
 
 ### 执行
 
+**方式一：curl 一键安装（推荐，从 GitHub）**
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh)
+```
+
+**方式二：本地脚本**
+
 ```bash
 bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh
 # 或从本目录直接运行
