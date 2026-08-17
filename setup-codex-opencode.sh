@@ -20,13 +20,10 @@ set -uo pipefail
 {
 trap 'printf "\nCancelled.\n"; exit 130' INT
 
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 PROVIDER_ID="opencode"
 BASE_URL="https://opencode.ai/zen/go/v1"
-FREE_PROVIDER_ID="opencode-free"
-FREE_BASE_URL="https://opencode.ai/zen/v1"
 MAIN_MODEL="deepseek-v4-flash"
-FREE_MODEL="deepseek-v4-flash-free"
 VISION_MODEL="mimo-v2.5"
 BACKUP_DIRNAME="backup-opencode-codex"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -164,63 +161,13 @@ do_restore() {
   exit 0
 }
 
-# ---------------------------------------------------------------- switch provider (--use-go / --use-free)
-do_switch() {
-  local target="$1" new_model new_provider label
-  if [ "$target" = "free" ]; then
-    new_model="$FREE_MODEL"; new_provider="$FREE_PROVIDER_ID"; label="free (opencode.ai/zen/v1)"
-  else
-    new_model="$MAIN_MODEL"; new_provider="$PROVIDER_ID"; label="paid (opencode.ai/zen/go/v1)"
-  fi
-  [ -f "$CONFIG_PATH" ] || die "未找到 $CONFIG_PATH —— 请先运行安装脚本。"
-  "$PY_BIN" - "$(winpath "$CONFIG_PATH")" "$new_model" "$new_provider" <<'PYEOF'
-import sys
-path, model, provider = sys.argv[1:4]
-lines = open(path, encoding='utf-8').read().split('\n')
-out = []
-in_section = False
-for line in lines:
-    s = line.strip()
-    if s.startswith('['):
-        in_section = True
-        out.append(line)
-        continue
-    if not in_section and s and not s.startswith('#'):
-        key = s.split('=', 1)[0].strip().strip('"')
-        if key == 'model':
-            out.append(f'model = "{model}"')
-            continue
-        if key == 'model_provider':
-            out.append(f'model_provider = "{provider}"')
-            continue
-    out.append(line)
-result = '\n'.join(out)
-import tomllib
-tomllib.loads(result)  # 校验 TOML 后再写回
-open(path, 'w', encoding='utf-8').write(result)
-print(f"switched: model={model} provider={provider}")
-PYEOF
-  head1 "已切换到 $label"
-  info "model=$new_model  model_provider=$new_provider"
-  info "请【重启 Codex】后生效。"
-  exit 0
-}
-
 # ---------------------------------------------------------------- main flow
 if [ "${1:-}" = "--restore" ] || [ "${1:-}" = "-r" ]; then
   do_restore
 fi
-if [ "${1:-}" = "--use-free" ]; then
-  do_switch free
-fi
-if [ "${1:-}" = "--use-go" ]; then
-  do_switch go
-fi
 if [ $# -gt 0 ]; then
-  die "用法: bash setup-codex-opencode.sh            (安装/更新)
-       bash setup-codex-opencode.sh --restore      (回退到安装前状态)
-       bash setup-codex-opencode.sh --use-free     (切换到 free 模型, provider=opencode-free, zen/v1)
-       bash setup-codex-opencode.sh --use-go       (切回付费模型, provider=opencode, zen/go/v1)"
+  die "用法: bash setup-codex-opencode.sh         (安装/更新)
+       bash setup-codex-opencode.sh --restore   (回退到安装前状态)"
 fi
 
 head1 "Codex × opencode go (deepseek-v4-flash) + mimo-v2.5 识图 — 一键配置 v$SCRIPT_VERSION"
@@ -425,7 +372,7 @@ for m in merged.values():
         m['input_modalities'] = ['text']
     if m['slug'] in ('mimo-v2.5', 'mimo-v2.5-free'):
         m['input_modalities'] = ['text', 'image']
-out = {'models': list(merged.values())}
+out = {'models': [m for m in merged.values() if not m['slug'].endswith('-free')]}
 json.dump(out, open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print(f"models.json 已写入: {len(out['models'])} 个模型")
 PYEOF
@@ -434,9 +381,9 @@ ok "models.json 已写入"
 
 # 4. 修改 config.toml（保留现有段落，更新必要字段）
 head1 "配置 config.toml"
-"$PY_BIN" - "$(winpath "$CONFIG_PATH")" "$API_KEY" "$MAIN_MODEL" "$BASE_URL" "$PROVIDER_ID" "$VISION_MODEL" "$FREE_PROVIDER_ID" "$FREE_BASE_URL" "$FREE_MODEL" <<'PYEOF'
+"$PY_BIN" - "$(winpath "$CONFIG_PATH")" "$API_KEY" "$MAIN_MODEL" "$BASE_URL" "$PROVIDER_ID" "$VISION_MODEL" <<'PYEOF'
 import sys, os, platform
-config_path, api_key, main_model, base_url, provider_id, vision_model, free_provider_id, free_base_url, free_model = sys.argv[1:10]
+config_path, api_key, main_model, base_url, provider_id, vision_model = sys.argv[1:7]
 
 is_windows = platform.system() == 'Windows'
 py_cmd = 'python' if is_windows else 'python3'
@@ -495,12 +442,6 @@ if body:
 new_config.append(f'[model_providers.{provider_id}]')
 new_config.append(f'name = "opencode go"')
 new_config.append(f'base_url = "{base_url}"')
-new_config.append('wire_api = "responses"')
-new_config.append(f'experimental_bearer_token = "{api_key}"')
-new_config.append('')
-new_config.append(f'[model_providers.{free_provider_id}]')
-new_config.append(f'name = "opencode free (zen)"')
-new_config.append(f'base_url = "{free_base_url}"')
 new_config.append('wire_api = "responses"')
 new_config.append(f'experimental_bearer_token = "{api_key}"')
 new_config.append('')
@@ -756,8 +697,6 @@ info "  - 识图:   遇到图片会自动用 $VISION_MODEL 描述"
 info "  - 子代理: 默认 $VISION_MODEL"
 info ""
 info "备份位置: $BACKUP_DIR"
-info "免费模型: bash setup-codex-opencode.sh --use-free  (provider=opencode-free, zen/v1)"
-info "付费模型: bash setup-codex-opencode.sh --use-go    (provider=opencode, zen/go/v1)"
 info "如需还原: 恢复 config.toml / models.json / OCR 技能（见 README.md）"
 info ""
 

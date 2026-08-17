@@ -10,16 +10,12 @@
 
 ```
 Codex 桌面版 / CLI
-  │  config.toml: model_provider="opencode" → https://opencode.ai/zen/go/v1（付费模型，go 订阅）
-  │                model_provider="opencode-free" → https://opencode.ai/zen/v1（free 模型）
+  │  config.toml: model_provider="opencode" → https://opencode.ai/zen/go/v1
   │  wire_api = "responses"（原生协议，无需任何中间桥接）
   ▼
-opencode.ai（Responses API，双 provider 按模型切换）
-  ├── zen/go/v1（opencode go 订阅）
-  │     ├── deepseek-v4-flash  主模型（文本，不支持图像）
-  │     └── mimo-v2.5          识图模型（多模态 text+image）
-  └── zen/v1（OpenCode Zen 标准端点）
-        └── deepseek-v4-flash-free 等 free 模型
+opencode.ai/zen/go/v1  (opencode go 订阅，Responses API)
+  ├── deepseek-v4-flash  主模型（文本，不支持图像）
+  └── mimo-v2.5          识图模型（多模态 text+image）
 
 图片任务流程:
 用户发图片 → codex 检测主模型不支持图像 → 替换为占位符
@@ -29,10 +25,10 @@ opencode.ai（Responses API，双 provider 按模型切换）
 
 **设计要点**：
 - **零中间件**：opencode.ai 原生支持 Responses API（apply_patch / web_search / reasoning 全部原生），不需要任何 bridge/代理
-- **双 provider**：付费模型走 `zen/go/v1`（go 订阅额度），free 模型走 `zen/v1`（免费额度）。Codex 不支持按模型自动路由 provider，故脚本提供 `--use-go` / `--use-free`（PowerShell 为 `-UseGo` / `-UseFree`）一键切换
 - **视觉回退**：主模型明确 `['text']` 模态（不能看图）→ 图片任务自动走 mimo-v2.5
 - **子代理**：`[agents] default_subagent_model = "mimo-v2.5"`，复杂图像任务可 spawn mimo-v2.5 子代理
 - **防 OCR 误用**：describe-image 技能引导模型走 mimo-v2.5；移走 layout-ocr/smart-ocr 技能避免模型自己折腾 OCR
+- **不使用 free 模型**：Codex 仅支持 Responses 协议，而 opencode 的 free 模型仅通过 Chat Completions 端点提供 → 协议不兼容，见下文说明
 
 ---
 
@@ -92,8 +88,8 @@ powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1
 ### 脚本做了什么（所有平台一致）
 
 1. 备份现有 `config.toml` / `models.json` / OCR 技能（到 `~/.codex/backup-opencode-codex/`）
-2. 写入 `models.json`（deepseek-v4-flash + mimo-v2.5 完整条目，含 free 模型元数据）
-3. 修改 `config.toml`（**双 provider**：`opencode`→zen/go/v1 付费、`opencode-free`→zen/v1 免费；agents / 识图指引，**保留 MCP、项目信任等现有配置**）
+2. 写入 `models.json`（deepseek-v4-flash + mimo-v2.5 完整条目）
+3. 修改 `config.toml`（provider / agents / 识图指引，**保留 MCP、项目信任等现有配置**）
 4. 创建识图脚本 `~/.codex/opencode-bridge-go/describe_image.py`
 5. 创建 `describe-image` 技能（`~/.agents/skills/` + `~/.codex/skills/`）
 6. 移走 `layout-ocr` / `smart-ocr` 技能（备份，避免模型误用 OCR）
@@ -108,33 +104,15 @@ powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1
 
 ---
 
-## 二点五、付费模型 vs 免费模型（双 provider 切换）
+## 二点五、为什么不用 free 模型（Codex 协议限制）
 
-OpenCode 有两个端点，脚本同时配置为两个 provider：
+本方案**只使用付费模型**（go 订阅，`zen/go/v1` 端点），不配置 free 模型选项。原因：
 
-| Provider | 端点 | 适用模型 | 计费 |
-|---|---|---|---|
-| `opencode` | `https://opencode.ai/zen/go/v1` | 付费模型（deepseek-v4-flash / deepseek-v4-pro / mimo-v2.5 等） | go 订阅额度（$10/月） |
-| `opencode-free` | `https://opencode.ai/zen/v1` | free 模型（deepseek-v4-flash-free / mimo-v2.5-free 等） | 免费额度（有限流） |
+1. **Codex 只支持 Responses 协议**：Codex 已移除 `wire_api = "chat"` 支持（见 [openai/codex discussion #7782](https://github.com/openai/codex/discussions/7782)），`wire_api` 仅支持 `"responses"`
+2. **opencode 的 free 模型仅通过 Chat Completions 端点提供**：实测 `zen/v1/chat/completions` 可正常返回（hy3-free、nemotron-3-ultra-free 等），而 `zen/v1/responses` 对 free 模型返回 429 或 server_error——free 模型的免费额度不走 Responses API
+3. → 两者协议不兼容，**Codex 中无法使用 free 模型**（配置无解，除非引入本地协议转换代理，会破坏本方案的"零中间件"设计）
 
-> 注意：free 模型在 `zen/go/v1` 端点**不存在**（报 401 `Model not supported`）；付费模型在 `zen/v1` 走账户余额计费（余额不足会 401）。因此**按模型切换 provider**。
-
-**切换命令**（切换后重启 Codex 生效）：
-
-```bash
-# macOS / Linux / Windows Git Bash
-bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh) --use-free   # 切到 free 模型
-bash setup-codex-opencode.sh --use-go     # 切回付费模型
-```
-
-```powershell
-# Windows PowerShell（已安装过时也可用菜单 3/4）
-irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 | iex   # 然后选 3（free）或 4（付费）
-powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -UseFree
-powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -UseGo
-```
-
-切换只改 `config.toml` 顶层的 `model` 与 `model_provider` 两个字段，其余配置不动。free 模型走 `zen/v1` 若遇 429 限流属正常现象（免费额度限制），稍后再试或切回付费模型。
+**替代方案**：需要 free 模型时，可在 [opencode](https://opencode.ai) 自己的 TUI/CLI 中 `/connect` 选择 OpenCode Zen 使用（其原生支持 Chat Completions）。Codex 继续使用 go 订阅的付费模型。
 
 ---
 

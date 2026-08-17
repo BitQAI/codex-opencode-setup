@@ -17,13 +17,10 @@ models.json / describe_image.py / SKILL.md templates are generated from the same
 source to stay in sync.
 #>
 
-$SCRIPT_VERSION = '1.1.0'
+$SCRIPT_VERSION = '1.2.0'
 $PROVIDER_ID    = 'opencode'
 $BASE_URL       = 'https://opencode.ai/zen/go/v1'
-$FREE_PROVIDER_ID = 'opencode-free'
-$FREE_BASE_URL  = 'https://opencode.ai/zen/v1'
 $MAIN_MODEL     = 'deepseek-v4-flash'
-$FREE_MODEL     = 'deepseek-v4-flash-free'
 $VISION_MODEL   = 'mimo-v2.5'
 $BACKUP_DIRNAME = 'backup-opencode-codex'
 $ABORT_SENTINEL = '__OPENCODE_SETUP_ABORT__'
@@ -80,55 +77,6 @@ function Find-Python {
         if ($v -match '1') { return $c }
     }
     return $null
-}
-
-# ---------------------------------------------------------------- switch provider (paid <-> free)
-function Invoke-SwitchProvider {
-    param([string]$Target)   # 'free' or 'go'
-    $ErrorActionPreference = 'Stop'
-    Set-StrictMode -Version Latest
-
-    $newModel    = if ($Target -eq 'free') { $FREE_MODEL }    else { $MAIN_MODEL }
-    $newProvider = if ($Target -eq 'free') { $FREE_PROVIDER_ID } else { $PROVIDER_ID }
-    $label       = if ($Target -eq 'free') { 'free (opencode.ai/zen/v1)' } else { 'paid (opencode.ai/zen/go/v1)' }
-
-    if (-not (Test-Path -LiteralPath $ConfigPath)) {
-        Die "Not found: $ConfigPath -- run the installer first."
-    }
-
-    $py = @'
-import sys
-path, model, provider = sys.argv[1:4]
-lines = open(path, encoding='utf-8').read().split('\n')
-out = []
-in_section = False
-for line in lines:
-    s = line.strip()
-    if s.startswith('['):
-        in_section = True
-        out.append(line)
-        continue
-    if not in_section and s and not s.startswith('#'):
-        key = s.split('=', 1)[0].strip().strip('"')
-        if key == 'model':
-            out.append(f'model = "{model}"')
-            continue
-        if key == 'model_provider':
-            out.append(f'model_provider = "{provider}"')
-            continue
-    out.append(line)
-result = '\n'.join(out)
-import tomllib
-tomllib.loads(result)  # validate TOML before writing back
-open(path, 'w', encoding='utf-8').write(result)
-print(f'switched: model={model} provider={provider}')
-'@
-    $py | & $PyBin - $ConfigPathFwd $newModel $newProvider
-    if ($LASTEXITCODE -ne 0) { Die 'Failed to switch provider' }
-
-    Write-Head "Switched to $label"
-    Write-Host "model=$newModel  model_provider=$newProvider"
-    Write-Host 'Please RESTART Codex for the change to take effect.'
 }
 
 # ---------------------------------------------------------------- restore
@@ -411,7 +359,7 @@ for m in merged.values():
         m['input_modalities'] = ['text']
     if m['slug'] in ('mimo-v2.5', 'mimo-v2.5-free'):
         m['input_modalities'] = ['text', 'image']
-out = {'models': list(merged.values())}
+out = {'models': [m for m in merged.values() if not m['slug'].endswith('-free')]}
 json.dump(out, open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print('models.json written: %d models' % len(out['models']))
 '@
@@ -424,7 +372,7 @@ print('models.json written: %d models' % len(out['models']))
     Write-Head 'Configuring config.toml'
     $py = @'
 import sys, os, platform
-config_path, api_key, main_model, base_url, provider_id, vision_model, free_provider_id, free_base_url, free_model = sys.argv[1:10]
+config_path, api_key, main_model, base_url, provider_id, vision_model = sys.argv[1:7]
 
 is_windows = platform.system() == 'Windows'
 py_cmd = 'python' if is_windows else 'python3'
@@ -486,12 +434,6 @@ new_config.append('base_url = "%s"' % base_url)
 new_config.append('wire_api = "responses"')
 new_config.append('experimental_bearer_token = "%s"' % api_key)
 new_config.append('')
-new_config.append('[model_providers.%s]' % free_provider_id)
-new_config.append('name = "opencode free (zen)"')
-new_config.append('base_url = "%s"' % free_base_url)
-new_config.append('wire_api = "responses"')
-new_config.append('experimental_bearer_token = "%s"' % api_key)
-new_config.append('')
 new_config.append('[agents]')
 new_config.append('default_subagent_model = "%s"' % vision_model)
 new_config.append('default_subagent_reasoning_effort = "medium"')
@@ -508,9 +450,9 @@ except Exception as e:
 open(config_path, 'w', encoding='utf-8').write(result)
 print('config.toml updated')
 '@
-    $py | & $PyBin - $ConfigPathFwd $apiKey $MAIN_MODEL $BASE_URL $PROVIDER_ID $VISION_MODEL $FREE_PROVIDER_ID $FREE_BASE_URL $FREE_MODEL
+    $py | & $PyBin - $ConfigPathFwd $apiKey $MAIN_MODEL $BASE_URL $PROVIDER_ID $VISION_MODEL
     if ($LASTEXITCODE -ne 0) { Die 'Failed to update config.toml' }
-    Write-Ok 'config.toml updated (dual providers: opencode / opencode-free)'
+    Write-Ok 'config.toml updated'
 
     # 5. describe_image.py
     Write-Head 'Creating the vision script describe_image.py'
@@ -756,14 +698,8 @@ try {
 
     $RestoreMode = $false
     if ($args -contains '-Restore' -or $args -contains '-restore') { $RestoreMode = $true }
-    $SwitchTarget = ''
-    if ($args -contains '-UseFree') { $SwitchTarget = 'free' }
-    if ($args -contains '-UseGo')   { $SwitchTarget = 'go' }
 
-    if ($SwitchTarget) {
-        Invoke-SwitchProvider $SwitchTarget
-    }
-    elseif ($RestoreMode) {
+    if ($RestoreMode) {
         Invoke-Restore
     }
     elseif (Test-Path -LiteralPath $Manifest) {
@@ -771,12 +707,10 @@ try {
         Write-Head 'An installation record was found.'
         Write-Host '  1. Reinstall / update the configuration'
         Write-Host '  2. Restore to the pre-install state'
-        $ans = Read-Host 'Choose (1/2/3/4, anything else cancels)'
+        $ans = Read-Host 'Choose (1/2, anything else cancels)'
         switch ($ans) {
             '1' { Invoke-Install }
             '2' { Invoke-Restore }
-            '3' { Invoke-SwitchProvider 'free' }
-            '4' { Invoke-SwitchProvider 'go' }
             default { Write-Host 'Cancelled.' }
         }
     }
