@@ -3,8 +3,8 @@
 # setup-codex-opencode.sh — 一键配置 Codex 连接 opencode go (deepseek-v4-flash)
 #                         并附带 mimo-v2.5 多模态识图能力
 #
-# 适用: macOS / Linux (Codex CLI 或 ChatGPT 桌面版)
-# 运行: bash setup-codex-opencode.sh
+# 适用: macOS / Linux / Windows (Git Bash) (Codex CLI 或 ChatGPT 桌面版)
+# 运行: bash setup-codex-opencode.sh   (Windows 请在 Git Bash 中运行)
 #
 # 本脚本会:
 #   1. 备份现有 ~/.codex/config.toml、models.json、OCR 技能
@@ -54,12 +54,51 @@ read_tty() {
   eval "$__var=\$__ans"
 }
 
+# ---------------------------------------------------------------- platform
+IS_WINDOWS=0
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+esac
+
+# Windows (Git Bash) 下把路径转为 Windows 原生风格（正斜杠），供原生 python 使用
+if command -v cygpath >/dev/null 2>&1 && [ "$IS_WINDOWS" -eq 1 ]; then
+  winpath() { cygpath -m "$1"; }
+else
+  winpath() { printf '%s' "$1"; }
+fi
+
+# 选择可用的 Python 3.11+（Windows 上可能只有 python；自动跳过 Microsoft Store 占位符）
+PY_BIN=""
+for __c in python3 python; do
+  if command -v "$__c" >/dev/null 2>&1 && "$__c" -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' >/dev/null 2>&1; then
+    PY_BIN="$__c"; break
+  fi
+done
+unset __c
+[ -n "$PY_BIN" ] || die "未找到 Python 3.11+（需要内置 tomllib）。请先安装: https://www.python.org/downloads/"
+
+# 平台化运行参数（命令名 / 临时目录提示）
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  PYTHON_CMD="python"
+  TMP_HINTS='`%TEMP%`, or the workspace'
+  TMP_EXAMPLE='%TEMP%\codex-clipboard-xxx.png'
+else
+  PYTHON_CMD="python3"
+  TMP_HINTS='`/tmp`, `/var/folders`, or the workspace'
+  TMP_EXAMPLE='/tmp/codex-clipboard-xxx.png'
+fi
+
 # ---------------------------------------------------------------- paths
-CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+if [ "$IS_WINDOWS" -eq 1 ]; then
+  CODEX_HOME_DIR="${CODEX_HOME:-$USERPROFILE/.codex}"
+else
+  CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+fi
 CONFIG_PATH="$CODEX_HOME_DIR/config.toml"
 MODELS_PATH="$CODEX_HOME_DIR/models.json"
 BRIDGE_DIR="$CODEX_HOME_DIR/opencode-bridge-go"
 DESCRIBE_SCRIPT="$BRIDGE_DIR/describe_image.py"
+DESCRIBE_CMD="$(winpath "$DESCRIBE_SCRIPT")"
 BACKUP_DIR="$CODEX_HOME_DIR/$BACKUP_DIRNAME"
 BACKUP_CONFIG="$BACKUP_DIR/config.toml"
 BACKUP_MODELS="$BACKUP_DIR/models.json"
@@ -171,7 +210,9 @@ ok "已记录安装前状态 (manifest.txt)"
 
 # 3. 写入 models.json（deepseek-v4-flash + mimo-v2.5 完整条目）
 head1 "写入 models.json"
-cat > /tmp/__codex_models.json <<'MODELS_JSON_EOF'
+mkdir -p "$CODEX_HOME_DIR"
+TMP_MODELS="$CODEX_HOME_DIR/.models.tmp.json"
+cat > "$TMP_MODELS" <<'MODELS_JSON_EOF'
 [
   {
     "slug": "deepseek-v4-flash",
@@ -311,15 +352,15 @@ cat > /tmp/__codex_models.json <<'MODELS_JSON_EOF'
 ]
 MODELS_JSON_EOF
 # 用 python 组装完整 models.json（含两个模型 + 检查合法性）
-python3 - "$MODELS_PATH" <<'PYEOF'
-import json, sys, copy
-path = sys.argv[1]
-core = json.load(open('/tmp/__codex_models.json'))
+"$PY_BIN" - "$(winpath "$MODELS_PATH")" "$(winpath "$TMP_MODELS")" <<'PYEOF'
+import json, sys, os
+path, tmp = sys.argv[1], sys.argv[2]
+core = json.load(open(tmp, encoding='utf-8'))
 # 从旧 models.json 保留其他模型（如 free 模型），并合并/覆盖核心模型
 merged = {}
-if __import__('os').path.exists(path):
+if os.path.exists(path):
     try:
-        for m in json.load(open(path)).get('models', []):
+        for m in json.load(open(path, encoding='utf-8')).get('models', []):
             merged[m['slug']] = m
     except Exception:
         pass
@@ -332,22 +373,31 @@ for m in merged.values():
     if m['slug'] in ('mimo-v2.5', 'mimo-v2.5-free'):
         m['input_modalities'] = ['text', 'image']
 out = {'models': list(merged.values())}
-json.dump(out, open(path, 'w'), ensure_ascii=False, indent=2)
+json.dump(out, open(path, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print(f"models.json 已写入: {len(out['models'])} 个模型")
 PYEOF
+rm -f "$TMP_MODELS"
 ok "models.json 已写入"
 
 # 4. 修改 config.toml（保留现有段落，更新必要字段）
 head1 "配置 config.toml"
-python3 - "$CONFIG_PATH" "$API_KEY" "$MAIN_MODEL" "$BASE_URL" "$PROVIDER_ID" "$VISION_MODEL" <<'PYEOF'
-import sys, os, re
+"$PY_BIN" - "$(winpath "$CONFIG_PATH")" "$API_KEY" "$MAIN_MODEL" "$BASE_URL" "$PROVIDER_ID" "$VISION_MODEL" <<'PYEOF'
+import sys, os, platform
 config_path, api_key, main_model, base_url, provider_id, vision_model = sys.argv[1:7]
+
+is_windows = platform.system() == 'Windows'
+py_cmd = 'python' if is_windows else 'python3'
+script_path = os.path.expanduser('~/.codex/opencode-bridge-go/describe_image.py').replace('\\', '/')
+if is_windows:
+    tmp_hint = 'the workspace or %TEMP%'
+else:
+    tmp_hint = 'the workspace, /tmp, or /var/folders'
 
 developer_instr = (
     "IMAGE HANDLING (MANDATORY): The primary model deepseek-v4-flash CANNOT receive images, so "
     "when the user provides an image or asks to analyze/read an image: 1) Locate the image file path "
-    "(usually under the workspace, /tmp, or /var/folders); 2) Run `python3 "
-    f"{os.path.expanduser('~/.codex/opencode-bridge-go/describe_image.py')} <path> [question]` to get an "
+    f"(usually under {tmp_hint}); 2) Run `{py_cmd} "
+    f"{script_path} <path> [question]` to get an "
     "accurate text description from the mimo-v2.5 multimodal model; 3) Answer using that description. "
     "Do NOT try to OCR images yourself with OCR skills or by compiling OCR tools - use describe_image.py first. "
     "For complex multi-image analysis you may spawn a subagent with model mimo-v2.5, but describe_image.py is the default path."
@@ -506,7 +556,7 @@ def main() -> None:
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + key,
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 codex-opencode-setup/1.0",
         },
     )
     data = None
@@ -585,16 +635,16 @@ The primary model (deepseek-v4-flash) cannot receive images. To understand ANY i
 Run the helper script via `exec_command`:
 
 ```
-python3 /Users/huajun/.codex/opencode-bridge-go/describe_image.py <image_path_or_url> [optional question]
+__PYTHON_CMD__ "__DESCRIBE_CMD__" <image_path_or_url> [optional question]
 ```
 
 Examples:
-- `python3 /Users/huajun/.codex/opencode-bridge-go/describe_image.py /tmp/codex-clipboard-xxx.png`
-- `python3 /Users/huajun/.codex/opencode-bridge-go/describe_image.py <path> "这张图表里的关键数据是什么"`
+- `__PYTHON_CMD__ "__DESCRIBE_CMD__" __TMP_EXAMPLE__`
+- `__PYTHON_CMD__ "__DESCRIBE_CMD__" <path> "这张图表里的关键数据是什么"`
 
 ## Workflow
 
-1. Locate the image file path (user attachments are usually under `/tmp`, `/var/folders`, or the workspace).
+1. Locate the image file path (user attachments are usually under __TMP_HINTS__).
 2. Run `describe_image.py` with that path (and an optional focused question).
 3. The script calls the **mimo-v2.5 multimodal model** and returns a JSON `{"description": "..."}`.
 4. Use that description to answer the user.
@@ -606,12 +656,23 @@ Examples:
 - For multiple images, run the script for each image.
 
 SKILL_EOF
+# 平台化替换占位符（Windows/macOS 路径与 python 命令名）
+"$PY_BIN" - "$(winpath "$AGENT_SKILLS_DIR/describe-image/SKILL.md")" "$PYTHON_CMD" "$DESCRIBE_CMD" "$TMP_HINTS" "$TMP_EXAMPLE" <<'PYEOF'
+import sys
+path, py_cmd, script, tmp_hints, tmp_example = sys.argv[1:6]
+s = open(path, encoding='utf-8').read()
+s = s.replace('__PYTHON_CMD__', py_cmd) \
+     .replace('__DESCRIBE_CMD__', script) \
+     .replace('__TMP_HINTS__', tmp_hints) \
+     .replace('__TMP_EXAMPLE__', tmp_example)
+open(path, 'w', encoding='utf-8').write(s)
+PYEOF
 cp "$AGENT_SKILLS_DIR/describe-image/SKILL.md" "$CODEX_SKILLS_DIR/describe-image/SKILL.md"
 ok "describe-image 技能已创建 (两处)"
 
 # 7. 验证
 head1 "验证"
-python3 - "$CONFIG_PATH" "$MODELS_PATH" <<'PYEOF'
+"$PY_BIN" - "$(winpath "$CONFIG_PATH")" "$(winpath "$MODELS_PATH")" <<'PYEOF'
 import sys, json
 config_path, models_path = sys.argv[1:3]
 import tomllib
@@ -623,7 +684,7 @@ if 'model_providers' in c and 'opencode' in c['model_providers']:
     print(f"  provider: base_url={p.get('base_url')} wire_api={p.get('wire_api')}")
 if 'agents' in c:
     print(f"  agents.default_subagent_model={c['agents'].get('default_subagent_model')}")
-d = json.load(open(models_path))
+d = json.load(open(models_path, encoding='utf-8'))
 for m in d['models']:
     if m['slug'] in ('deepseek-v4-flash', 'mimo-v2.5'):
         print(f"  models.json: {m['slug']} modalities={m.get('input_modalities')}")

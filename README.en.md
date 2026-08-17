@@ -110,6 +110,8 @@ python3 ~/.codex/opencode-bridge-go/describe_image.py <image_path_or_url> [quest
 # output: {"description": "..."}
 ```
 
+> On Windows (Git Bash) the script lives at `C:\Users\<you>\.codex\opencode-bridge-go\describe_image.py`; use `python` instead of `python3`.
+
 ### 3.4 Vision skill `~/.agents/skills/describe-image/SKILL.md` (and `~/.codex/skills/describe-image/`)
 
 See the `SKILL_EOF` section in the script. It makes the model see the "use mimo-v2.5 for images" approach first on image tasks.

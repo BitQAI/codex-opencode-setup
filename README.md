@@ -37,6 +37,10 @@ opencode.ai/zen/go/v1  (opencode go 订阅，Responses API)
 
 1. 已安装 Codex（CLI 或 ChatGPT 桌面版），且**至少启动过一次**（生成 `~/.codex` 目录）
 2. 有 opencode go 订阅的 **API Key**（`sk-` 开头）
+3. 本机有 **Python 3.11+**（脚本用内置 `tomllib` 校验配置；macOS/Linux 命令为 `python3`，Windows 为 `python`）
+4. **Windows**：安装 [Git for Windows](https://git-scm.com/download/win)（自带 Git Bash），并在 **Git Bash** 中运行脚本
+
+> **平台支持**：macOS / Linux / Windows (Git Bash)。脚本自动检测平台并适配路径与 python 命令，Windows 下无需额外配置。
 
 ### 执行
 
@@ -53,6 +57,11 @@ bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh
 # 或从本目录直接运行
 cd ~/.codex/opencode-codex-setup && bash setup-codex-opencode.sh
 ```
+
+> **Windows 用户**：在 Git Bash 中执行上述命令（开始菜单搜 "Git Bash"）。脚本自动识别 Windows：
+> - Codex 配置目录用 `%USERPROFILE%\.codex`（即 `C:\Users\<你>\.codex`）
+> - 自动选择 `python` 命令（并跳过 Microsoft Store 的 python 占位符）
+> - 生成的识图命令 / 技能路径均为 Windows 原生路径
 
 脚本会：
 1. 备份现有 `config.toml` / `models.json` / OCR 技能（到 `~/.codex/backup-opencode-codex/`）
@@ -110,6 +119,8 @@ python3 ~/.codex/opencode-bridge-go/describe_image.py <图片路径或URL> [问�
 # 输出: {"description": "..."}
 ```
 
+> Windows（Git Bash）下脚本路径为 `C:\Users\<你>\.codex\opencode-bridge-go\describe_image.py`，命令用 `python`。
+
 ### 4. 识图技能 `~/.agents/skills/describe-image/SKILL.md`（及 `~/.codex/skills/describe-image/`）
 
 内容见脚本内 `SKILL_EOF` 段。它让模型在图片任务时优先看到"用 mimo-v2.5 识图"的方案。
@@ -142,7 +153,7 @@ mv ~/.agents/skills/smart-ocr ~/.codex/backup-opencode-codex/disabled-skills-ocr
 ## 五、验证
 
 ```bash
-# 1. 配置语法
+# 1. 配置语法（Windows 把 python3 换成 python）
 python3 -c "import tomllib; tomllib.load(open('$HOME/.codex/config.toml','rb')); print('config OK')"
 python3 -c "import json; json.load(open('$HOME/.codex/models.json')); print('models OK')"
 
@@ -163,7 +174,7 @@ curl -s -X POST "https://opencode.ai/zen/go/v1/responses" \
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 重启后模型还是自己 OCR | 技能未注入 / codex 未重启 | 确认重启 Codex；检查 `~/.agents/skills/describe-image/` 存在 |
-| 图片路径找不到 | 剪贴板图片在 `/var/folders` 临时目录 | developer_instructions 已提示；模型用 `find` 定位 |
+| 图片路径找不到 | 剪贴板图片在 `/var/folders`（macOS）或 `%TEMP%`（Windows）临时目录 | developer_instructions 已按平台提示；模型用 `find` 定位 |
 | apply_patch 报错 | 直连后应原生支持 | 确认 `wire_api="responses"`（非 bridge 地址） |
 | 多轮后 reasoning 400 | 超长会话（30万+ token） | 开新会话；或调低 `auto_compact_token_limit` |
 | 403 (Cloudflare) | 请求 UA 被拦 | 用浏览器 UA（脚本已带）；勿用裸 urllib 默认 UA |
@@ -172,7 +183,7 @@ curl -s -X POST "https://opencode.ai/zen/go/v1/responses" \
 
 ## 七、还原 / 回退到原生 Codex
 
-**一键还原**（恢复到安装前状态，包括 config.toml / models.json / OCR 技能）：
+**一键还原**（恢复到安装前状态，包括 config.toml / models.json / OCR 技能；Windows 请在 Git Bash 中运行）：
 
 ```bash
 bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh --restore
