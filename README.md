@@ -33,37 +33,59 @@ opencode.ai/zen/go/v1  (opencode go 订阅，Responses API)
 
 ## 二、快速开始（一键脚本，推荐）
 
-### 前提
+### 前提（所有平台通用）
 
 1. 已安装 Codex（CLI 或 ChatGPT 桌面版），且**至少启动过一次**（生成 `~/.codex` 目录）
 2. 有 opencode go 订阅的 **API Key**（`sk-` 开头）
-3. 本机有 **Python 3.11+**（脚本用内置 `tomllib` 校验配置；macOS/Linux 命令为 `python3`，Windows 为 `python`）
-4. **Windows**：安装 [Git for Windows](https://git-scm.com/download/win)（自带 Git Bash），并在 **Git Bash** 中运行脚本
+3. 本机有 **Python 3.11+**（脚本用内置 `tomllib` 校验配置）
 
-> **平台支持**：macOS / Linux / Windows (Git Bash)。脚本自动检测平台并适配路径与 python 命令，Windows 下无需额外配置。
+### 平台与一键命令总览
 
-### 执行
+| 平台 | 一键命令 | 额外要求 |
+|---|---|---|
+| macOS / Linux | `bash <(curl -fsSL ...)` | 无（系统自带 python3 即可） |
+| **Windows（推荐）** | `irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 \| iex`（PowerShell） | PowerShell 5.1+（Windows 自带），无需装 Git Bash |
+| Windows（备选） | 在 **Git Bash** 中运行 bash 版命令 | 需安装 [Git for Windows](https://git-scm.com/download/win) |
 
-**方式一：curl 一键安装（推荐，从 GitHub）**
+> 两个脚本（`setup-codex-opencode.sh` / `setup-codex-opencode.ps1`）功能完全一致（备份/写入/还原），内嵌模板同源同步；按平台任选其一。
+
+### macOS / Linux
 
 ```bash
+# 方式一：curl 一键安装（推荐，从 GitHub）
 bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh)
-```
 
-**方式二：本地脚本**
-
-```bash
+# 方式二：本地脚本
 bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh
 # 或从本目录直接运行
 cd ~/.codex/opencode-codex-setup && bash setup-codex-opencode.sh
 ```
 
-> **Windows 用户**：在 Git Bash 中执行上述命令（开始菜单搜 "Git Bash"）。脚本自动识别 Windows：
-> - Codex 配置目录用 `%USERPROFILE%\.codex`（即 `C:\Users\<你>\.codex`）
-> - 自动选择 `python` 命令（并跳过 Microsoft Store 的 python 占位符）
-> - 生成的识图命令 / 技能路径均为 Windows 原生路径
+### Windows（PowerShell，推荐——无需 Git Bash）
 
-脚本会：
+打开 **PowerShell**（开始菜单搜 "PowerShell"，Windows 10/11 自带），粘贴执行：
+
+```powershell
+irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 | iex
+```
+
+首次运行会要求输入 API Key；若检测到已安装过，会显示菜单：`1` 重新安装/更新，`2` 还原到安装前状态。
+
+也可下载到本地再运行（适合查看源码/离线）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1
+```
+
+### Windows（Git Bash 备选）
+
+若偏好 bash（或无法使用 PowerShell），在 **Git Bash**（开始菜单搜 "Git Bash"）中运行 macOS/Linux 的命令即可。脚本自动识别 Windows：
+- Codex 配置目录用 `%USERPROFILE%\.codex`（即 `C:\Users\<你>\.codex`）
+- 自动选择 `python` 命令（并跳过 Microsoft Store 的 python 占位符）
+- 生成的识图命令 / 技能路径均为 Windows 原生路径
+
+### 脚本做了什么（所有平台一致）
+
 1. 备份现有 `config.toml` / `models.json` / OCR 技能（到 `~/.codex/backup-opencode-codex/`）
 2. 写入 `models.json`（deepseek-v4-flash + mimo-v2.5 完整条目）
 3. 修改 `config.toml`（provider / agents / 识图指引，**保留 MCP、项目信任等现有配置**）
@@ -112,7 +134,7 @@ default_subagent_reasoning_effort = "medium"
 
 ### 3. 识图脚本 `~/.codex/opencode-bridge-go/describe_image.py`
 
-内容见 `setup-codex-opencode.sh` 内 `DESCRIBE_EOF` 段（或从本机现有文件复制）。
+内容见 `setup-codex-opencode.sh` 内 `DESCRIBE_EOF` 段（或 `setup-codex-opencode.ps1` 内同源模板，或从本机现有文件复制）。
 
 ```bash
 python3 ~/.codex/opencode-bridge-go/describe_image.py <图片路径或URL> [问题]
@@ -123,7 +145,7 @@ python3 ~/.codex/opencode-bridge-go/describe_image.py <图片路径或URL> [问�
 
 ### 4. 识图技能 `~/.agents/skills/describe-image/SKILL.md`（及 `~/.codex/skills/describe-image/`）
 
-内容见脚本内 `SKILL_EOF` 段。它让模型在图片任务时优先看到"用 mimo-v2.5 识图"的方案。
+内容见脚本内 `SKILL_EOF` 段（两个平台脚本同源）。它让模型在图片任务时优先看到"用 mimo-v2.5 识图"的方案。
 
 ### 5. 移走 OCR 技能（可选但推荐）
 
@@ -183,10 +205,18 @@ curl -s -X POST "https://opencode.ai/zen/go/v1/responses" \
 
 ## 七、还原 / 回退到原生 Codex
 
-**一键还原**（恢复到安装前状态，包括 config.toml / models.json / OCR 技能；Windows 请在 Git Bash 中运行）：
+**一键还原**（恢复到安装前状态，包括 config.toml / models.json / OCR 技能）：
 
 ```bash
+# macOS / Linux（或 Windows Git Bash）
 bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh --restore
+# 或远程：bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh) --restore
+```
+
+```powershell
+# Windows（PowerShell）：重跑脚本后选菜单 2，或加 -Restore 参数
+irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 | iex   # 然后选 2
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Restore
 ```
 
 脚本根据安装时记录的 `manifest.txt` 智能判断：

@@ -38,23 +38,59 @@ User sends image → codex detects primary model lacks image support → replace
 1. Codex installed (CLI or ChatGPT desktop app), and **launched at least once** (creates the `~/.codex` directory)
 2. An **API Key** for the opencode go subscription (starts with `sk-`)
 
-### Run
+### Prerequisites (all platforms)
 
-**Option 1: curl one-click install (recommended, from GitHub)**
+1. Codex installed (CLI or ChatGPT desktop app), and **launched at least once** (creates the `~/.codex` directory)
+2. An **API Key** for the opencode go subscription (starts with `sk-`)
+3. **Python 3.11+** installed (the scripts use built-in `tomllib` for validation)
+
+### One-click commands by platform
+
+| Platform | One-click command | Extra requirements |
+|---|---|---|
+| macOS / Linux | `bash <(curl -fsSL ...)` | none |
+| **Windows (recommended)** | `irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 \| iex` (PowerShell) | PowerShell 5.1+ (built into Windows); no Git Bash needed |
+| Windows (fallback) | run the bash commands inside **Git Bash** | install [Git for Windows](https://git-scm.com/download/win) |
+
+> The two scripts (`setup-codex-opencode.sh` / `setup-codex-opencode.ps1`) are functionally identical (backup / write / restore) and share the same inlined templates; pick whichever fits your platform.
+
+### macOS / Linux
 
 ```bash
+# Option 1: curl one-click install (recommended, from GitHub)
 bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh)
-```
 
-**Option 2: local script**
-
-```bash
+# Option 2: local script
 bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh
 # or run from this directory
 cd ~/.codex/opencode-codex-setup && bash setup-codex-opencode.sh
 ```
 
-The script will:
+### Windows (PowerShell, recommended -- no Git Bash required)
+
+Open **PowerShell** (search "PowerShell" in Start Menu; built into Windows 10/11) and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 | iex
+```
+
+On first run it asks for your API Key; if an installation record is detected it shows a menu: `1` reinstall/update, `2` restore to the pre-install state.
+
+You can also download it and run locally (handy for reviewing the source / offline):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1
+```
+
+### Windows (Git Bash fallback)
+
+If you prefer bash (or cannot use PowerShell), run the macOS/Linux commands inside **Git Bash**. The script auto-detects Windows:
+- Uses `%USERPROFILE%\.codex` (i.e. `C:\Users\<you>\.codex`) as the Codex config dir
+- Picks the `python` command automatically (skipping the Microsoft Store python stub)
+- Generates Windows-native paths for the vision command / skill
+
+### What the script does (identical on all platforms)
+
 1. Back up existing `config.toml` / `models.json` / OCR skills (to `~/.codex/backup-opencode-codex/`)
 2. Write `models.json` (full entries for deepseek-v4-flash + mimo-v2.5)
 3. Modify `config.toml` (provider / agents / image-handling instructions, **preserving existing MCP, project trust, etc.**)
@@ -177,7 +213,15 @@ curl -s -X POST "https://opencode.ai/zen/go/v1/responses" \
 **One-click restore** (restores to the pre-install state, including config.toml / models.json / OCR skills):
 
 ```bash
+# macOS / Linux (or Windows Git Bash)
 bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh --restore
+# or remote: bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh) --restore
+```
+
+```powershell
+# Windows (PowerShell): rerun the script and pick menu item 2, or pass -Restore
+irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 | iex   # then pick 2
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Restore
 ```
 
 The script uses the `manifest.txt` recorded at install time to decide intelligently:
