@@ -10,12 +10,16 @@ Quickly configure Codex on a new machine to use **deepseek-v4-flash via the open
 
 ```
 Codex Desktop / CLI
-  │  config.toml: model_provider="opencode" → https://opencode.ai/zen/go/v1
+  │  config.toml: model_provider="opencode" → https://opencode.ai/zen/go/v1 (paid models, go subscription)
+  │                model_provider="opencode-free" → https://opencode.ai/zen/v1 (free models)
   │  wire_api = "responses" (native protocol, no middleware)
   ▼
-opencode.ai/zen/go/v1  (opencode go subscription, Responses API)
-  ├── deepseek-v4-flash  primary model (text only, no image support)
-  └── mimo-v2.5          vision model (multimodal text+image)
+opencode.ai (Responses API, dual providers switched by model)
+  ├── zen/go/v1 (opencode go subscription)
+  │     ├── deepseek-v4-flash  primary model (text only, no image support)
+  │     └── mimo-v2.5          vision model (multimodal text+image)
+  └── zen/v1 (OpenCode Zen standard endpoint)
+        └── deepseek-v4-flash-free and other free models
 
 Image task flow:
 User sends image → codex detects primary model lacks image support → replaces with placeholder
@@ -25,6 +29,7 @@ User sends image → codex detects primary model lacks image support → replace
 
 **Design highlights**:
 - **Zero middleware**: opencode.ai natively supports the Responses API (apply_patch / web_search / reasoning all native), no bridge or proxy needed
+- **Dual providers**: paid models use `zen/go/v1` (go subscription quota); free models use `zen/v1` (free quota). Codex cannot route providers per model, so the script provides `--use-go` / `--use-free` (PowerShell: `-UseGo` / `-UseFree`) for one-click switching
 - **Vision fallback**: primary model explicitly `['text']` modality (cannot see images) → image tasks automatically go through mimo-v2.5
 - **Subagents**: `[agents] default_subagent_model = "mimo-v2.5"` — complex image tasks can spawn a mimo-v2.5 subagent
 - **Anti-OCR misuse**: the describe-image skill steers the model to mimo-v2.5; layout-ocr/smart-ocr skills are moved away to prevent the model from hacking OCR itself
@@ -92,8 +97,8 @@ If you prefer bash (or cannot use PowerShell), run the macOS/Linux commands insi
 ### What the script does (identical on all platforms)
 
 1. Back up existing `config.toml` / `models.json` / OCR skills (to `~/.codex/backup-opencode-codex/`)
-2. Write `models.json` (full entries for deepseek-v4-flash + mimo-v2.5)
-3. Modify `config.toml` (provider / agents / image-handling instructions, **preserving existing MCP, project trust, etc.**)
+2. Write `models.json` (full entries for deepseek-v4-flash + mimo-v2.5, including free model metadata)
+3. Modify `config.toml` (**dual providers**: `opencode`→zen/go/v1 paid, `opencode-free`→zen/v1 free; agents / image-handling instructions, **preserving existing MCP, project trust, etc.**)
 4. Create the vision script `~/.codex/opencode-bridge-go/describe_image.py`
 5. Create the `describe-image` skill (`~/.agents/skills/` + `~/.codex/skills/`)
 6. Move away `layout-ocr` / `smart-ocr` skills (backed up, to prevent OCR misuse)
@@ -105,6 +110,36 @@ If you prefer bash (or cannot use PowerShell), run the macOS/Linux commands insi
 - Normal conversation (deepseek-v4-flash direct)
 - Send an image → should be automatically described by mimo-v2.5
 - Ask the model to edit files with `apply_patch` → should work natively
+
+---
+
+## 2.5. Paid Models vs Free Models (dual-provider switching)
+
+OpenCode exposes two endpoints; the script configures both as providers:
+
+| Provider | Endpoint | Models | Billing |
+|---|---|---|---|
+| `opencode` | `https://opencode.ai/zen/go/v1` | paid (deepseek-v4-flash / deepseek-v4-pro / mimo-v2.5, etc.) | go subscription quota ($10/mo) |
+| `opencode-free` | `https://opencode.ai/zen/v1` | free (deepseek-v4-flash-free / mimo-v2.5-free, etc.) | free quota (rate-limited) |
+
+> Note: free models do **not** exist on the `zen/go/v1` endpoint (401 `Model not supported`); paid models on `zen/v1` bill against account balance (401 when balance is insufficient). So switch the provider together with the model.
+
+**Switch commands** (restart Codex after switching):
+
+```bash
+# macOS / Linux / Windows Git Bash
+bash <(curl -fsSL https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.sh) --use-free   # switch to free models
+bash setup-codex-opencode.sh --use-go     # switch back to paid
+```
+
+```powershell
+# Windows PowerShell (or pick menu 3/4 if already installed)
+irm https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1 | iex   # then pick 3 (free) or 4 (paid)
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -UseFree
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -UseGo
+```
+
+Switching only edits the top-level `model` and `model_provider` fields in `config.toml`; everything else is untouched. A 429 rate limit on `zen/v1` is normal for free quota — wait and retry, or switch back to paid.
 
 ---
 
