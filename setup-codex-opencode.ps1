@@ -485,6 +485,9 @@ import urllib.error
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SEC = 2
 
+# 优先 mimo-v2.5，服务端 500 时回退到备用视觉模型
+MODELS = ["mimo-v2.5", "deepseek-v4-flash-vision-exp"]
+
 API = "https://opencode.ai/zen/go/v1/responses"
 
 
@@ -529,41 +532,49 @@ def main() -> None:
         print(json.dumps({"error": f"读取图片失败: {e}"}, ensure_ascii=False))
         return
 
-    payload = {
-        "model": "mimo-v2.5",
-        "input": [{
-            "type": "message",
-            "role": "user",
-            "content": [
-                {"type": "input_image", "image_url": img_url},
-                {"type": "input_text", "text": question},
-            ],
-        }],
-        "stream": False,
-    }
-    req = urllib.request.Request(
-        API,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + key,
-            "User-Agent": "Mozilla/5.0 codex-opencode-setup/1.0",
-        },
-    )
     data = None
     last_err = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            resp = urllib.request.urlopen(req, timeout=90)
-            data = json.loads(resp.read().decode())
+    for model in MODELS:
+        payload = {
+            "model": model,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": img_url},
+                    {"type": "input_text", "text": question},
+                ],
+            }],
+            "stream": False,
+        }
+        req = urllib.request.Request(
+            API,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + key,
+                "User-Agent": "Mozilla/5.0 codex-opencode-setup/1.0",
+            },
+        )
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                resp = urllib.request.urlopen(req, timeout=90)
+                data = json.loads(resp.read().decode())
+                break
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode()[:300]
+                # 5xx 视为该模型服务端故障，切换下一个模型；4xx 直接报错
+                if 500 <= e.code < 600:
+                    last_err = f"{model}: HTTP {e.code}: {err_body}"
+                    break
+                print(json.dumps({"error": f"HTTP {e.code}: {err_body}"}, ensure_ascii=False))
+                return
+            except Exception as e:
+                last_err = f"{model}: {e}"
+                if attempt < MAX_ATTEMPTS:
+                    time.sleep(RETRY_DELAY_SEC)
+        if data is not None:
             break
-        except urllib.error.HTTPError as e:
-            print(json.dumps({"error": f"HTTP {e.code}: {e.read().decode()[:300]}"}, ensure_ascii=False))
-            return
-        except Exception as e:
-            last_err = e
-            if attempt < MAX_ATTEMPTS:
-                time.sleep(RETRY_DELAY_SEC)
     if data is None:
         print(json.dumps({"error": f"请求失败(已重试{MAX_ATTEMPTS}次): {last_err}"}, ensure_ascii=False))
         return
@@ -638,7 +649,7 @@ Examples:
 
 1. Locate the image file path (user attachments are usually under __TMP_HINTS__).
 2. Run `describe_image.py` with that path (and an optional focused question).
-3. The script calls the **mimo-v2.5 multimodal model** and returns a JSON `{"description": "..."}`.
+3. The script calls the **mimo-v2.5 multimodal model** (with automatic fallback to `deepseek-v4-flash-vision-exp` if mimo is unavailable) and returns a JSON `{"description": "..."}`.
 4. Use that description to answer the user.
 
 ## Important
