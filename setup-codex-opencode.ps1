@@ -11,13 +11,19 @@ How to run:
   Restore:
     Run the script and pick menu item 2 (or: powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Restore)
 
+  Manage API Key:
+    powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Key [NEW_KEY]
+
+  Sync from remote and redeploy:
+    powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Update
+
 Requirements: Python 3.11+ (used for TOML/JSON validation), Codex launched at least once.
 This script is the Windows counterpart of setup-codex-opencode.sh; the embedded
 models.json / describe_image.py / SKILL.md templates are generated from the same
 source to stay in sync.
 #>
 
-$SCRIPT_VERSION = '1.2.0'
+$SCRIPT_VERSION = '1.3.0'
 $PROVIDER_ID    = 'opencode'
 $BASE_URL       = 'https://opencode.ai/zen/go/v1'
 $MAIN_MODEL     = 'deepseek-v4-flash'
@@ -137,6 +143,107 @@ function Invoke-Restore {
     Write-Head 'Restore complete'
     Write-Host 'Please RESTART Codex (fully quit the desktop app) for the change to take effect.'
     Write-Host "Backup directory kept at: $BackupDir"
+}
+
+# ---------------------------------------------------------------- api key (-Key)
+function Invoke-SetApiKey {
+    param([string]$NewKey)
+    $ErrorActionPreference = 'Stop'
+    $envFile = Join-Path $BridgeDir '.env'
+    Write-Head 'Manage opencode go API Key'
+
+    $cur = $null
+    if (Test-Path -LiteralPath $envFile) {
+        $l = Get-Content -LiteralPath $envFile -Encoding UTF8 -ErrorAction SilentlyContinue |
+             Where-Object { $_ -match '^OPENCODE_API_KEY=' } | Select-Object -First 1
+        if ($l) { $cur = ($l -split '=', 2)[1].Trim() }
+    }
+    if ($cur) {
+        $masked = if ($cur.Length -gt 12) { $cur.Substring(0, 6) + '***' + $cur.Substring($cur.Length - 4) } else { '***' }
+        Write-Host "Current Key: $masked"
+        Write-Host "Location: $envFile"
+    } else {
+        Write-Warn2 "No API Key configured yet ($envFile)"
+    }
+
+    if (-not $NewKey) {
+        $NewKey = Read-Host 'Enter new API Key (starts with sk-, empty to cancel)'
+        if (-not $NewKey) { Write-Host 'Cancelled.'; return }
+    }
+    if ($NewKey -notlike 'sk-*') { Write-Warn2 'Key usually starts with sk-; using the provided value anyway.' }
+
+    New-Item -ItemType Directory -Force -Path $BridgeDir | Out-Null
+    Write-Utf8NoBom $envFile "OPENCODE_API_KEY=$NewKey`n"
+    $NewKey = $null
+    Write-Ok "API Key written to $envFile"
+
+    Write-Host 'Verifying connectivity...'
+    $pyCmd = Find-Python
+    if (-not $pyCmd) { Die 'Python 3.11+ not found; cannot verify the key.' }
+    $check = @'
+import sys, urllib.request
+key = ""
+for line in open(sys.argv[1], encoding="utf-8-sig"):
+    line = line.strip()
+    if line.startswith("OPENCODE_API_KEY="):
+        key = line.split("=", 1)[1].strip()
+req = urllib.request.Request("https://opencode.ai/zen/go/v1/models",
+    headers={"Authorization": "Bearer " + key,
+             "User-Agent": "Mozilla/5.0 codex-opencode-setup/1.0"})
+try:
+    urllib.request.urlopen(req, timeout=15); print("ok")
+except Exception as e:
+    print("fail:", e)
+'@
+    $res = ($check | & $pyCmd - $envFile | Select-Object -First 1)
+    if ($res -eq 'ok') {
+        Write-Ok 'Verification passed; the key works.'
+    } else {
+        Write-Warn2 "$res"
+        Die 'Key may be invalid or network error; the file has been written anyway.'
+    }
+    Write-Host 'Please RESTART Codex for the change to take effect.'
+}
+
+# ---------------------------------------------------------------- self update (-Update)
+function Invoke-SelfUpdate {
+    $repoRaw = 'https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main/setup-codex-opencode.ps1'
+    Write-Head 'Sync latest script from remote and redeploy'
+
+    $scriptPath = $PSCommandPath
+    if (-not $scriptPath) { Die 'Running from pipeline (irm | iex). Save the script to a file first, then rerun with -Update.' }
+
+    $isGit = $false
+    if ($PSScriptRoot) {
+        & git -C $PSScriptRoot rev-parse --is-inside-work-tree *> $null
+        if ($LASTEXITCODE -eq 0) { $isGit = $true }
+    }
+
+    if ($isGit) {
+        Write-Host "Git repository mode: $PSScriptRoot"
+        & git -C $PSScriptRoot fetch origin main
+        if ($LASTEXITCODE -ne 0) { Die 'git fetch failed; check network and retry.' }
+        $localRev  = & git -C $PSScriptRoot rev-parse HEAD
+        $remoteRev = & git -C $PSScriptRoot rev-parse origin/main
+        if ($localRev -eq $remoteRev) {
+            Write-Ok 'Script is already up to date.'
+        } else {
+            & git -C $PSScriptRoot pull --ff-only origin main
+            if ($LASTEXITCODE -ne 0) { Die 'Fast-forward pull failed (local changes?). Resolve manually and retry.' }
+            $shortRev = & git -C $PSScriptRoot rev-parse --short HEAD
+            Write-Ok "Script updated to $shortRev"
+        }
+    } else {
+        Write-Host 'Not a git checkout; downloading latest script...'
+        $tmp = "$scriptPath.tmp"
+        try { Invoke-WebRequest -Uri $repoRaw -OutFile $tmp -UseBasicParsing } catch { Die "Download failed: $_" }
+        Move-Item -LiteralPath $tmp -Destination $scriptPath -Force
+        Write-Ok "Updated $scriptPath"
+    }
+
+    Write-Host ''
+    Write-Host 'Redeploying configuration with the updated script (reuses existing API Key)...'
+    & powershell -ExecutionPolicy Bypass -File $scriptPath -Install
 }
 
 # ---------------------------------------------------------------- install / update
@@ -707,10 +814,23 @@ try {
         Die "Python 3.11+ not found (needed for built-in tomllib). Install it from https://www.python.org/downloads/ and ensure 'Add python.exe to PATH' is checked."
     }
 
-    $RestoreMode = $false
-    if ($args -contains '-Restore' -or $args -contains '-restore') { $RestoreMode = $true }
+    $RestoreMode = $false; $KeyMode = $false; $UpdateMode = $false; $InstallMode = $false; $KeyValue = ''
+    for ($i = 0; $i -lt $args.Count; $i++) {
+        switch ($args[$i]) {
+            '-Restore' { $RestoreMode = $true }
+            '-Key'     { $KeyMode = $true; if ($i + 1 -lt $args.Count -and $args[$i + 1] -notlike '-*') { $KeyValue = $args[$i + 1]; $i++ } }
+            '-Update'  { $UpdateMode = $true }
+            '-Install' { $InstallMode = $true }
+        }
+    }
 
-    if ($RestoreMode) {
+    if ($KeyMode)   { Invoke-SetApiKey -NewKey $KeyValue; return }
+    if ($UpdateMode) { Invoke-SelfUpdate; return }
+
+    if ($InstallMode) {
+        Invoke-Install
+    }
+    elseif ($RestoreMode) {
         Invoke-Restore
     }
     elseif (Test-Path -LiteralPath $Manifest) {

@@ -4,7 +4,12 @@
 #                         并附带 mimo-v2.5 多模态识图能力
 #
 # 适用: macOS / Linux / Windows (Git Bash) (Codex CLI 或 ChatGPT 桌面版)
-# 运行: bash setup-codex-opencode.sh   (Windows 请在 Git Bash 中运行)
+#
+# 用法:
+#   bash setup-codex-opencode.sh               # 安装 / 更新配置
+#   bash setup-codex-opencode.sh --key [KEY]   # 查看/更新 API Key（带参数直接设置）
+#   bash setup-codex-opencode.sh --update      # 同步远程最新脚本并重新部署
+#   bash setup-codex-opencode.sh --restore     # 回退到安装前状态
 #
 # 本脚本会:
 #   1. 备份现有 ~/.codex/config.toml、models.json、OCR 技能
@@ -20,7 +25,8 @@ set -uo pipefail
 {
 trap 'printf "\nCancelled.\n"; exit 130' INT
 
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
+REPO_RAW="https://raw.githubusercontent.com/BitQAI/codex-opencode-setup/main"
 PROVIDER_ID="opencode"
 BASE_URL="https://opencode.ai/zen/go/v1"
 MAIN_MODEL="deepseek-v4-flash"
@@ -161,14 +167,115 @@ do_restore() {
   exit 0
 }
 
+# ---------------------------------------------------------------- api key (--key)
+mask_key() {
+  local k="$1" n=${#1}
+  if [ "$n" -le 8 ]; then printf '***'; else printf '%s***%s' "${k:0:6}" "${k: -4}"; fi
+}
+
+do_key() {
+  local new_key="${1:-}" cur="" res=""
+  local env_file="$BRIDGE_DIR/.env"
+  [ -f "$env_file" ] && cur=$(grep '^OPENCODE_API_KEY=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2-)
+
+  head1 "管理 opencode go API Key"
+  if [ -n "$cur" ]; then
+    info "当前 Key: $(mask_key "$cur")"
+    info "位置: $env_file"
+  else
+    warn "尚未配置 API Key ($env_file)"
+  fi
+
+  if [ -z "$new_key" ]; then
+    read_tty new_key "输入新 Key (sk- 开头，直接回车取消): "
+    [ -z "$new_key" ] && { info "已取消，未修改。"; exit 0; }
+  fi
+  case "$new_key" in
+    sk-*) ;;
+    *) warn "Key 通常以 sk- 开头，仍将使用你提供的值。" ;;
+  esac
+
+  mkdir -p "$BRIDGE_DIR"
+  local old_umask
+  old_umask=$(umask)
+  umask 077
+  printf 'OPENCODE_API_KEY=%s\n' "$new_key" > "$env_file"
+  umask "$old_umask"
+  chmod 600 "$env_file" 2>/dev/null
+  unset new_key
+  ok "API Key 已写入 $env_file"
+
+  info "正在验证连通性..."
+  res=$("$PY_BIN" - "$env_file" <<'KEYCHECK_EOF'
+import sys, urllib.request
+key = ""
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if line.startswith("OPENCODE_API_KEY="):
+        key = line.split("=", 1)[1].strip()
+req = urllib.request.Request(
+    "https://opencode.ai/zen/go/v1/models",
+    headers={"Authorization": "Bearer " + key,
+             "User-Agent": "Mozilla/5.0 codex-opencode-setup/1.0"})
+try:
+    urllib.request.urlopen(req, timeout=15)
+    print("ok")
+except Exception as e:
+    print("fail:", e)
+KEYCHECK_EOF
+)
+  case "$res" in
+    ok) ok "验证通过，Key 可用。" ;;
+    *) warn "$res"
+       warn "Key 可能无效或网络异常，请检查后重试（文件已写入）。"
+       exit 1 ;;
+  esac
+  info "请【重启 Codex】后生效。"
+  exit 0
+}
+
+# ---------------------------------------------------------------- self update (--update)
+do_update() {
+  head1 "同步远程最新脚本并重新部署"
+  local self_name="setup-codex-opencode.sh"
+  local self_path="$SCRIPT_DIR/$self_name"
+  local tmp
+
+  if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+     && git -C "$SCRIPT_DIR" remote get-url origin >/dev/null 2>&1; then
+    info "git 仓库模式: $SCRIPT_DIR"
+    git -C "$SCRIPT_DIR" fetch origin main || die "git fetch 失败，请检查网络后重试。"
+    if [ "$(git -C "$SCRIPT_DIR" rev-parse HEAD)" = "$(git -C "$SCRIPT_DIR" rev-parse origin/main)" ]; then
+      ok "脚本已是远程最新版本。"
+    else
+      git -C "$SCRIPT_DIR" pull --ff-only origin main || die "fast-forward 更新失败（本地存在改动？）。请手动处理 $SCRIPT_DIR 后重试。"
+      ok "脚本已更新到 $(git -C "$SCRIPT_DIR" rev-parse --short HEAD)"
+    fi
+  else
+    info "非 git 目录，从 GitHub 下载最新脚本..."
+    tmp="$self_path.tmp.$$"
+    curl -fsSL "$REPO_RAW/$self_name" -o "$tmp" || { rm -f "$tmp"; die "下载失败，请检查网络后重试。"; }
+    mv "$tmp" "$self_path"
+    ok "已更新 $self_path"
+  fi
+
+  info ""
+  info "使用最新脚本重新部署配置（复用已有 API Key）..."
+  exec bash "$self_path"
+}
+
 # ---------------------------------------------------------------- main flow
-if [ "${1:-}" = "--restore" ] || [ "${1:-}" = "-r" ]; then
-  do_restore
-fi
-if [ $# -gt 0 ]; then
-  die "用法: bash setup-codex-opencode.sh         (安装/更新)
-       bash setup-codex-opencode.sh --restore   (回退到安装前状态)"
-fi
+case "${1:-}" in
+  --restore|-r) do_restore ;;
+  --key|-k)     do_key "${2:-}" ;;
+  --update|-u)  do_update ;;
+  "") ;;
+  *) die "未知参数: $1
+用法: bash setup-codex-opencode.sh               # 安装 / 更新配置
+      bash setup-codex-opencode.sh --key [KEY]   # 查看/更新 API Key
+      bash setup-codex-opencode.sh --update      # 同步远程并重新部署
+      bash setup-codex-opencode.sh --restore     # 回退到安装前状态" ;;
+esac
 
 head1 "Codex × opencode go (deepseek-v4-flash) + mimo-v2.5 识图 — 一键配置 v$SCRIPT_VERSION"
 

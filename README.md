@@ -216,6 +216,36 @@ curl -s -X POST "https://opencode.ai/zen/go/v1/responses" \
 
 ---
 
+## 六点五、常用命令：更新 API Key / 同步远程更新
+
+**查看 / 更新 API Key**（写入 `~/.codex/opencode-bridge-go/.env`，权限 600，写入后自动验证连通性）：
+
+```bash
+# macOS / Linux（或 Windows Git Bash）
+bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh --key          # 交互式（显示脱敏后的当前 Key）
+bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh --key sk-xxx   # 直接设置
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Key          # 交互式
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Key sk-xxx   # 直接设置
+```
+
+> 更换 Key 后需【重启 Codex】生效。
+
+**同步远程最新脚本并重新部署**（git 仓库则 fast-forward 拉取；否则从 GitHub 下载覆盖，随后自动重跑安装流程，复用已有 API Key）：
+
+```bash
+bash ~/.codex/opencode-codex-setup/setup-codex-opencode.sh --update
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-codex-opencode.ps1 -Update
+```
+
+---
+
 ## 七、还原 / 回退到原生 Codex
 
 **一键还原**（恢复到安装前状态，包括 config.toml / models.json / OCR 技能）：
